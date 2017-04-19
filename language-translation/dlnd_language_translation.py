@@ -97,6 +97,7 @@ def model_inputs():
     targets = tf.placeholder(dtype=tf.float32, shape=[None, None], name="targets")
     lr = tf.placeholder(dtype=tf.float32, name="learning_rate")
     keep_probability = tf.placeholder(dtype=tf.float32, name="keep_prob")
+
     return input, targets, lr, keep_probability
 
 
