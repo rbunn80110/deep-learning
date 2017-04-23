@@ -93,8 +93,8 @@ def model_inputs():
     Create TF Placeholders for input, targets, and learning rate.
     :return: Tuple (input, targets, learning rate, keep probability)
     """
-    input = tf.placeholder(dtype=tf.float32, shape=[None, None], name="input")
-    targets = tf.placeholder(dtype=tf.float32, shape=[None, None], name="targets")
+    input = tf.placeholder(dtype=tf.int32, shape=[None, None], name="input")
+    targets = tf.placeholder(dtype=tf.int32, shape=[None, None], name="targets")
     lr = tf.placeholder(dtype=tf.float32, name="learning_rate")
     keep_probability = tf.placeholder(dtype=tf.float32, name="keep_prob")
 
@@ -115,8 +115,15 @@ def process_decoding_input(target_data, target_vocab_to_int, batch_size):
     :param batch_size: Batch Size
     :return: Preprocessed target data
     """
-    # TODO: Implement Function
-    return None
+    slice = tf.strided_slice(target_data,
+                             [0, 0],
+                             [batch_size, -1],
+                             [1, 1])
+    filled = tf.fill([batch_size, 1],
+                     target_vocab_to_int["<GO>"])
+    combined = tf.concat([filled, slice], 1)
+
+    return combined
 
 
 """
@@ -134,8 +141,14 @@ def encoding_layer(rnn_inputs, rnn_size, num_layers, keep_prob):
     :param keep_prob: Dropout keep probability
     :return: RNN state
     """
-    # TODO: Implement Function
-    return None
+    basic_lstm = tf.contrib.rnn.BasicLSTMCell(rnn_size)
+    dropout = tf.contrib.rnn.DropoutWrapper(basic_lstm, keep_prob)
+    multi_rnn_cell = tf.contrib.rnn.MultiRNNCell([dropout] * num_layers)
+
+    _, final_state = tf.nn.dynamic_rnn(multi_rnn_cell,
+                                       rnn_inputs,
+                                       dtype=tf.float32)
+    return final_state
 
 
 """
@@ -157,8 +170,15 @@ def decoding_layer_train(encoder_state, dec_cell, dec_embed_input, sequence_leng
     :param keep_prob: Dropout keep probability
     :return: Train Logits
     """
-    # TODO: Implement Function
-    return None
+    simple_decoder_train = tf.contrib.seq2seq.simple_decoder_fn_train(encoder_state)
+    outputs, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
+                                                           simple_decoder_train,
+                                                           dec_embed_input,
+                                                           sequence_length,
+                                                           scope=decoding_scope)
+    outputs = tf.nn.dropout(outputs, keep_prob)
+    logits = output_fn(outputs)
+    return logits
 
 
 """
@@ -167,8 +187,7 @@ DON'T MODIFY ANYTHING IN THIS CELL THAT IS BELOW THIS LINE
 tests.test_decoding_layer_train(decoding_layer_train)
 
 
-def decoding_layer_infer(encoder_state, dec_cell, dec_embeddings, start_of_sequence_id, end_of_sequence_id,
-                         maximum_length, vocab_size, decoding_scope, output_fn, keep_prob):
+def decoding_layer_infer(encoder_state, dec_cell, dec_embeddings, start_of_sequence_id,end_of_sequence_id, maximum_length, vocab_size, decoding_scope, output_fn, keep_prob):
     """
     Create a decoding layer for inference
     :param encoder_state: Encoder state
@@ -183,8 +202,20 @@ def decoding_layer_infer(encoder_state, dec_cell, dec_embeddings, start_of_seque
     :param keep_prob: Dropout keep probability
     :return: Inference Logits
     """
-    # TODO: Implement Function
-    return None
+    simple_decoder_inference = tf.contrib.seq2seq.simple_decoder_fn_inference(output_fn,
+                                                                  encoder_state,
+                                                                  dec_embeddings,
+                                                                  start_of_sequence_id,
+                                                                  end_of_sequence_id,
+                                                                  maximum_length,
+                                                                  vocab_size)
+    dropout = tf.contrib.rnn.DropoutWrapper(dec_cell, keep_prob)
+    logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dropout,
+                                                          simple_decoder_inference,
+                                                          sequence_length=maximum_length,
+                                                          scope=decoding_scope)
+
+    return logits
 
 
 """
@@ -208,8 +239,38 @@ def decoding_layer(dec_embed_input, dec_embeddings, encoder_state, vocab_size, s
     :param keep_prob: Dropout keep probability
     :return: Tuple of (Training Logits, Inference Logits)
     """
-    # TODO: Implement Function
-    return None, None
+    basic_lstm = tf.contrib.rnn.BasicLSTMCell(rnn_size)
+    dropout = tf.contrib.rnn.DropoutWrapper(basic_lstm, keep_prob)
+    multi_rnn_cell = tf.contrib.rnn.MultiRNNCell([dropout] * num_layers)
+
+    max_sentence_length = max([len(sentence) for sentence in source_int_text])
+
+    with tf.variable_scope('decoding_layer') as decoding_layer_scope:
+        output = lambda x: tf.contrib.layers.fully_connected(x,
+                                                                vocab_size,
+                                                                None,
+                                                                scope=decoding_layer_scope)
+        logits_training = decoding_layer_train(encoder_state,
+                                               multi_rnn_cell,
+                                               dec_embed_input,
+                                                sequence_length,
+                                               decoding_layer_scope,
+                                               output,
+                                               keep_prob)
+
+    with tf.variable_scope('decoding_layer', reuse=True) as decoding_scope:
+        logits_inference = decoding_layer_infer(encoder_state,
+                                                multi_rnn_cell,
+                                                dec_embeddings,
+                                                target_vocab_to_int['<GO>'],
+                                                target_vocab_to_int['<EOS>'],
+                                                max_sentence_length,
+                                                vocab_size,
+                                                decoding_scope,
+                                                output,
+                                                keep_prob)
+
+    return logits_training, logits_inference
 
 
 """
@@ -236,8 +297,32 @@ def seq2seq_model(input_data, target_data, keep_prob, batch_size, sequence_lengt
     :param target_vocab_to_int: Dictionary to go from the target words to an id
     :return: Tuple of (Training Logits, Inference Logits)
     """
-    # TODO: Implement Function
-    return None
+    encoder_embedded_input = tf.contrib.layers.embed_sequence(input_data,
+                                                              source_vocab_size,
+                                                              enc_embedding_size)
+    encoder_state = encoding_layer(encoder_embedded_input,
+                               rnn_size,
+                               num_layers,
+                               keep_prob)
+
+    decoder_input = process_decoding_input(target_data,
+                                       target_vocab_to_int,
+                                       batch_size)
+    decoder_embeddings = tf.Variable(tf.random_normal([target_vocab_size, dec_embedding_size],
+                                                      stddev=0.01))
+    decoder_embedded_input = tf.nn.embedding_lookup(decoder_embeddings,
+                                                    decoder_input)
+    logits_training, logits_inference = decoding_layer(decoder_embedded_input,
+                                                decoder_embeddings,
+                                                encoder_state,
+                                                target_vocab_size,
+                                                sequence_length,
+                                                rnn_size,
+                                                num_layers,
+                                                target_vocab_to_int,
+                                                keep_prob)
+
+    return logits_training, logits_inference
 
 
 """
@@ -246,20 +331,20 @@ DON'T MODIFY ANYTHING IN THIS CELL THAT IS BELOW THIS LINE
 tests.test_seq2seq_model(seq2seq_model)
 
 # Number of Epochs
-epochs = None
+epochs = 16
 # Batch Size
-batch_size = None
+batch_size = 256
 # RNN Size
-rnn_size = None
+rnn_size = 325
 # Number of Layers
-num_layers = None
+num_layers = 3
 # Embedding Size
-encoding_embedding_size = None
-decoding_embedding_size = None
+encoding_embedding_size = 128
+decoding_embedding_size = 128
 # Learning Rate
-learning_rate = None
+learning_rate = 0.001
 # Dropout Keep Probability
-keep_probability = None
+keep_probability = 0.8
 
 """
 DON'T MODIFY ANYTHING IN THIS CELL
@@ -385,8 +470,8 @@ def sentence_to_seq(sentence, vocab_to_int):
     :param vocab_to_int: Dictionary to go from the words to an id
     :return: List of word ids
     """
-    # TODO: Implement Function
-    return None
+    seq = [vocab_to_int.get(word, vocab_to_int['<UNK>']) for word in sentence.lower().split()]
+    return seq
 
 
 """
